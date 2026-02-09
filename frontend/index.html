@@ -1,0 +1,1340 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Patient Note Clinic - Prototype</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        .timeline-line {
+            position: absolute;
+            left: 20px;
+            top: 0;
+            bottom: 0;
+            width: 2px;
+            background-color: #e5e7eb;
+            z-index: 0;
+        }
+
+        .highlight-risk {
+            background-color: #fecaca;
+            /* red-200 */
+            cursor: pointer;
+        }
+
+        .highlight-risk:hover {
+            background-color: #fca5a5;
+        }
+
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+
+<body class="bg-gray-50 h-screen overflow-hidden">
+    <div id="root" class="h-full"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        const API_BASE = '/api';
+
+        // --- Components ---
+
+        const Badge = ({ children, color = 'blue' }) => (
+            <span className={`px-2 py-0.5 rounded text-xs font-medium bg-${color}-100 text-${color}-800`}>
+                {children}
+            </span>
+        );
+
+        const RoleSwitcher = ({ currentRole, onChange }) => (
+            <div className="flex items-center space-x-2 bg-white p-2 rounded shadow-sm border">
+                <span className="text-sm font-bold text-gray-600">Current Role:</span>
+                <select
+                    value={currentRole}
+                    onChange={(e) => onChange(e.target.value)}
+                    className="border rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                    <option value="clinician">Clinician</option>
+                    <option value="staff">Staff</option>
+                    <option value="patient">Patient</option>
+                    <option value="admin">Admin</option>
+                </select>
+            </div>
+        );
+
+        const GlanceView = ({ data, onSignalClick, onActionClick, onConfirmedClick, onAiNoteClick, handleCreateAction, role }) => {
+            if (role === 'patient') return null;
+
+            const [expanded, setExpanded] = useState(false);
+
+            if (!data) return <div className="h-32 flex items-center justify-center">Loading Glance View...</div>;
+
+            const signals = data.key_signals || [];
+            const displayedSignals = expanded ? signals : signals.slice(0, 5);
+            const hasMore = signals.length > 5;
+
+            return (
+                <div className="h-40 bg-white border-b flex overflow-x-auto p-4 space-x-6 shadow-sm shrink-0">
+                    {/* Actions */}
+                    <div className="min-w-[200px] border-r pr-4">
+                        <div className="flex justify-between items-center mb-2">
+                            <h3 className="text-xs uppercase font-bold text-gray-500">Actions</h3>
+                            {/* Only Staff/Clinician/Admin can create actions */}
+                        </div>
+                        <div className="space-y-2 overflow-y-auto max-h-[100px]">
+                            {data.actions && Array.isArray(data.actions) && data.actions.map(action => (
+                                <div
+                                    key={action.id}
+                                    onClick={() => action.provenance_note_id && onActionClick(action)}
+                                    className={`text-sm p-2 bg-yellow-50 border border-yellow-200 rounded ${action.provenance_note_id ? 'cursor-pointer hover:bg-yellow-100' : 'cursor-default opacity-80'}`}
+                                >
+                                    <div className="font-medium">{action.title}</div>
+                                    <div className="text-xs text-gray-500">{action.status}</div>
+                                </div>
+                            ))}
+                            {(!data.actions || data.actions.length === 0) && <div className="text-sm text-gray-400">No pending actions</div>}
+                        </div>
+                    </div>
+
+                    {/* Key Signals */}
+                    <div className="min-w-[300px] border-r pr-4">
+                        <h3 className="text-xs uppercase font-bold text-gray-500 mb-2">Key Signals (AI & User)</h3>
+                        <div className="flex flex-col h-full">
+                            <div className="flex flex-wrap gap-2 overflow-y-auto max-h-[80px]">
+                                {displayedSignals.map((signal, idx) => (
+                                    <div
+                                        key={idx}
+                                        onClick={() => onSignalClick(signal)}
+                                        title={signal.reason || "Important Signal"}
+                                        className={`px-3 py-1 border rounded-full text-sm cursor-pointer flex items-center ${signal.type === 'user-highlight' ? 'bg-yellow-100 border-yellow-300 text-yellow-800 hover:bg-yellow-200' : 'bg-red-50 border-red-200 text-red-700 hover:bg-red-100'}`}
+                                    >
+                                        <span className="mr-1">{signal.type === 'user-highlight' ? '🖍️' : '⚠️'}</span> {signal.text}
+                                    </div>
+                                ))}
+                                {signals.length === 0 && <div className="text-sm text-gray-400">No signals detected</div>}
+                            </div>
+                            {hasMore && (
+                                <button
+                                    onClick={() => setExpanded(!expanded)}
+                                    className="text-xs text-blue-500 hover:underline mt-1 self-start"
+                                >
+                                    {expanded ? 'Show Less' : `Show ${signals.length - 5} More`}
+                                </button>
+                            )}
+                        </div>
+                    </div>
+
+                    {/* AI Scribed Notes */}
+                    {['clinician', 'staff', 'admin'].includes(role) && (
+                        <div className="min-w-[250px] border-r pr-4">
+                            <h3 className="text-xs uppercase font-bold text-gray-500 mb-2">AI Scribed Notes</h3>
+                            <div className="space-y-2 overflow-y-auto max-h-[100px]">
+                                {data.ai_scribed_notes && Array.isArray(data.ai_scribed_notes) && data.ai_scribed_notes.map((note) => (
+                                    <div
+                                        key={note.id}
+                                        onClick={() => onAiNoteClick(note)}
+                                        className="p-2 bg-purple-50 border border-purple-200 rounded text-sm text-purple-900 cursor-pointer hover:bg-purple-100"
+                                    >
+                                        <div className="font-bold text-xs flex justify-between">
+                                            <span>🤖 {note.type}</span>
+                                            <span className="text-gray-500 font-normal">{note.timestamp.split(' ')[1]}</span>
+                                        </div>
+                                        <div className="truncate text-xs mt-1 text-gray-600">{note.summary}</div>
+                                    </div>
+                                ))}
+                                {(!data.ai_scribed_notes || data.ai_scribed_notes.length === 0) && <div className="text-sm text-gray-400 italic">No AI notes yet.</div>}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Clinician Confirmed */}
+                    {['clinician', 'admin'].includes(role) && (
+                        <div className="min-w-[200px]">
+                            <h3 className="text-xs uppercase font-bold text-gray-500 mb-2">Clinician Confirmed</h3>
+                            <div className="space-y-2 overflow-y-auto max-h-[100px]">
+                                {data.clinician_confirmed && Array.isArray(data.clinician_confirmed) && data.clinician_confirmed.map((item, idx) => (
+                                    <div
+                                        key={idx}
+                                        onClick={() => onConfirmedClick(item)}
+                                        className="p-2 bg-green-50 border border-green-200 rounded text-sm text-green-800 cursor-pointer hover:bg-green-100"
+                                    >
+                                        <div className="font-bold text-xs">{item.type === 'modification' ? '✏️ Modified AI' : '✅ Decision'}</div>
+                                        <div className="truncate">{item.text}</div>
+                                    </div>
+                                ))}
+                                {(!data.clinician_confirmed || data.clinician_confirmed.length === 0) && <div className="text-sm text-gray-400 italic">No confirmed decisions yet.</div>}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const TimelineEntry = ({ note, isSelected, onClick, userRole, onEdit }) => {
+            const isSystem = note.author_role === 'system';
+            const isAI = note.author_role === 'ai';
+            const isConsultSummary = note.type && note.type.startsWith('ai_') && note.type.includes('summary');
+
+            const renderContent = (content, highlights) => {
+                if (!content) return "";
+                if (!highlights || !Array.isArray(highlights) || highlights.length === 0) return content;
+
+                // Sort highlights by start position
+                const sorted = [...highlights].sort((a, b) => a.start - b.start);
+                const parts = [];
+                let lastIndex = 0;
+
+                sorted.forEach(h => {
+                    // Safety check for bounds
+                    if (h.start < 0 || h.end > content.length) return;
+
+                    // Skip overlapping highlights for prototype simplicity
+                    if (h.start < lastIndex) return;
+
+                    if (h.start > lastIndex) {
+                        parts.push(content.substring(lastIndex, h.start));
+                    }
+                    parts.push(
+                        <span key={h.id} data-highlight-id={h.id} className="font-bold bg-yellow-200" title={h.type}>
+                            {content.substring(h.start, h.end)}
+                        </span>
+                    );
+                    lastIndex = h.end;
+                });
+
+                if (lastIndex < content.length) {
+                    parts.push(content.substring(lastIndex));
+                }
+
+                return parts;
+            };
+
+            return (
+                <div
+                    id={`note-${note.id}`}
+                    onClick={() => onClick(note)}
+                    className={`relative pl-8 pb-6 group cursor-pointer ${isSelected ? 'bg-blue-50 -mx-4 px-4 rounded' : ''}`}
+                >
+                    {/* Timeline Dot */}
+                    <div className={`absolute left-[14px] top-1 w-3 h-3 rounded-full border-2 z-10 ${isSystem ? 'bg-gray-400 border-gray-400' :
+                        isAI ? 'bg-purple-500 border-purple-500' :
+                            'bg-blue-500 border-blue-500'
+                        }`}></div>
+
+                    <div className="flex justify-between items-start mb-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-bold text-sm text-gray-900 capitalize">{note.author_role}</span>
+                            <span className="text-xs text-gray-500">{note.timestamp}</span>
+
+                            {isConsultSummary ? (
+                                <Badge color="green">AI-generated {note.type.replace('ai_', '').replace('_summary', '')}</Badge>
+                            ) : (
+                                <Badge color={isAI ? 'purple' : 'gray'}>{note.type}</Badge>
+                            )}
+
+                            {note.version > 1 && <span className="text-xs bg-gray-200 px-1 rounded">v{note.version}</span>}
+
+                            {note.provenance_pointer && (
+                                <span className="text-[10px] text-gray-400 border border-gray-200 px-1 rounded" title={`Source: ${note.provenance_pointer}`}>
+                                    🔗 Source
+                                </span>
+                            )}
+                        </div>
+                    </div>
+
+                    <div className="text-sm text-gray-800 whitespace-pre-wrap">
+                        {renderContent(note.content, note.highlights)}
+                    </div>
+                </div>
+            );
+        };
+
+        const ActionManager = ({ action, role, onResolve, setMentionMenu }) => {
+            const [comment, setComment] = useState('');
+            const [forwardType, setForwardType] = useState('');
+
+            // Determine forward options (reciprocal)
+            // If I am Clinician, I assign to Staff. If Staff, I assign to Clinician.
+            const forwardOptions = role === 'clinician' ?
+                ['Need Lab Orders', 'Need Help from Nurse/Staff'] :
+                ['Request Clinician Review', 'Follow-up with Patient'];
+
+            const handleResolve = () => {
+                onResolve(action.id, 'resolve', comment);
+            };
+
+            const handleForward = () => {
+                if (!forwardType) {
+                    alert("Please select an option to forward/return.");
+                    return;
+                }
+                onResolve(action.id, 'forward', comment, forwardType);
+            };
+
+            const handleCommentChange = (e) => {
+                detectMention(e, role, setComment, setMentionMenu);
+            };
+
+            return (
+                <div className="p-3 border rounded bg-blue-50 mb-4 shadow-sm">
+                    <div className="flex justify-between items-start mb-2">
+                        <h4 className="font-bold text-sm text-blue-800">Action Required</h4>
+                        <span className="text-xs bg-blue-200 text-blue-800 px-1 rounded">Unresolved</span>
+                    </div>
+                    <p className="text-sm font-medium mb-2">{action.title}</p>
+
+                    <textarea
+                        className="w-full text-sm border p-2 rounded mb-2 focus:ring-2 focus:ring-blue-500 outline-none"
+                        placeholder={role === 'clinician' ? "@Staff add comment..." : "@Clinician add comment..."}
+                        rows="2"
+                        value={comment}
+                        onChange={handleCommentChange}
+                    />
+
+                    <div className="flex flex-col gap-2">
+                        <button
+                            onClick={handleResolve}
+                            className="w-full bg-green-600 hover:bg-green-700 text-white text-xs px-3 py-2 rounded flex justify-center items-center"
+                        >
+                            ✅ Mark Resolved
+                        </button>
+
+                        <div className="flex gap-2">
+                            <select
+                                className="flex-1 text-xs border rounded p-1 bg-white"
+                                value={forwardType}
+                                onChange={e => setForwardType(e.target.value)}
+                            >
+                                <option value="" disabled>-- Select: Return / Forward to {role === 'clinician' ? 'Staff' : 'Clinician'} --</option>
+                                {forwardOptions.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                            </select>
+                            <button
+                                type="button"
+                                onClick={handleForward}
+                                className={`bg-blue-600 hover:bg-blue-700 text-white text-xs px-3 py-1 rounded ${!forwardType ? 'opacity-50' : ''}`}
+                            >
+                                Send
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const SidePanel = ({ note, userRole, onSaveEdit, onResolveAction, setMentionMenu, onRevert }) => {
+            const [editContent, setEditContent] = useState('');
+            const [isEditing, setIsEditing] = useState(false);
+
+            useEffect(() => {
+                if (note) {
+                    setEditContent(note.content || '');
+                    setIsEditing(false);
+                }
+            }, [note]);
+
+            if (!note) {
+                return (
+                    <div className="h-full flex flex-col items-center justify-center text-gray-400 p-8 text-center">
+                        <svg className="w-12 h-12 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                        <p>Select an entry from the timeline to view details.</p>
+                    </div>
+                );
+            }
+
+            // Filter actions assigned to current user that are unresolved
+            const myActions = (note.actions && Array.isArray(note.actions)) ? note.actions.filter(a =>
+                a.assigned_to_role === userRole && (a.status === 'unresolved' || a.status === 'pending')
+            ) : [];
+
+            const handleSave = () => {
+                onSaveEdit(note.id, editContent);
+                setIsEditing(false);
+            };
+
+            const handleEditChange = (e) => {
+                detectMention(e, userRole, setEditContent, setMentionMenu);
+            };
+
+            const canEdit = (
+                userRole === 'admin' ||
+                (userRole === 'clinician' && ['clinician', 'ai', 'system'].includes(note.author_role)) ||
+                (userRole === 'staff' && note.author_role === 'staff') ||
+                (userRole === 'patient' && note.author_role === 'patient')
+            );
+
+            return (
+                <div className="h-full flex flex-col bg-white border-l shadow-xl">
+                    <div className="p-4 border-b bg-gray-50">
+                        <h2 className="font-bold text-lg text-gray-800">Details</h2>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto p-4 space-y-6">
+                        {/* Action Management Section */}
+                        {myActions.length > 0 && userRole !== 'patient' && (
+                            <div className="mb-6">
+                                <h3 className="font-bold text-sm text-gray-700 mb-2 uppercase tracking-wide">Pending Actions</h3>
+                                {myActions.map(action => (
+                                    <ActionManager
+                                        key={action.id}
+                                        action={action}
+                                        role={userRole}
+                                        onResolve={onResolveAction}
+                                        setMentionMenu={setMentionMenu}
+                                    />
+                                ))}
+                            </div>
+                        )}
+
+                        {/* Metadata */}
+                        {userRole === 'patient' ? (
+                            <div className="grid grid-cols-2 gap-4 text-sm">
+                                <div>
+                                    <span className="block text-gray-500 text-xs">Date</span>
+                                    <span className="font-medium">{note.timestamp}</span>
+                                </div>
+                                <div>
+                                    <span className="block text-gray-500 text-xs">Author</span>
+                                    <span className="font-medium capitalize">{note.author_role}</span>
+                                </div>
+                                {note.provenance_pointer && (
+                                    <div className="col-span-2">
+                                        <span className="block text-gray-500 text-xs">Source Reference</span>
+                                        <span className="font-mono text-xs text-gray-600">{note.provenance_pointer}</span>
+                                    </div>
+                                )}
+                            </div>
+                        ) : (
+                            <div className="grid grid-cols-2 gap-4 text-sm">
+                                <div>
+                                    <span className="block text-gray-500 text-xs">Author Role</span>
+                                    <span className="font-medium capitalize">{note.author_role}</span>
+                                </div>
+                                <div>
+                                    <span className="block text-gray-500 text-xs">Type</span>
+                                    <span className="font-medium">{note.type}</span>
+                                </div>
+                                <div>
+                                    <span className="block text-gray-500 text-xs">Timestamp</span>
+                                    <span className="font-medium">{note.timestamp}</span>
+                                </div>
+                                <div>
+                                    <span className="block text-gray-500 text-xs">ID</span>
+                                    <span className="font-mono text-xs text-gray-600 truncate">{String(note.id).split('-')[0]}...</span>
+                                </div>
+                                <div>
+                                    <span className="block text-gray-500 text-xs">Scope</span>
+                                    <span className="font-medium capitalize">
+                                        {note.visibility_scope ? (
+                                            typeof note.visibility_scope === 'object' ?
+                                                Object.keys(note.visibility_scope).filter(k => note.visibility_scope[k]).join(', ') :
+                                                note.visibility_scope
+                                        ) : 'Default'}
+                                    </span>
+                                </div>
+                                {note.provenance_pointer && (
+                                    <div className="col-span-2">
+                                        <span className="block text-gray-500 text-xs">Provenance / Source</span>
+                                        <span className="font-mono text-xs text-gray-600">{note.provenance_pointer}</span>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {/* Provenance / Content */}
+                        <div>
+                            <div className="flex justify-between items-center mb-2">
+                                <h3 className="font-bold text-sm text-gray-700">Content & Provenance</h3>
+                                {canEdit && !isEditing && (
+                                    <button
+                                        onClick={() => setIsEditing(true)}
+                                        className="text-xs text-blue-600 hover:text-blue-800 font-medium"
+                                    >
+                                        Edit / Revise
+                                    </button>
+                                )}
+                            </div>
+
+                            {isEditing ? (
+                                <div className="space-y-2">
+                                    <textarea
+                                        value={editContent}
+                                        onChange={handleEditChange}
+                                        className="w-full h-40 p-2 border rounded text-sm focus:ring-2 focus:ring-blue-500"
+                                    />
+                                    <div className="flex justify-end space-x-2">
+                                        <button
+                                            onClick={() => setIsEditing(false)}
+                                            className="px-3 py-1 text-sm border rounded hover:bg-gray-50"
+                                        >
+                                            Cancel
+                                        </button>
+                                        <button
+                                            onClick={handleSave}
+                                            className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
+                                        >
+                                            Save Revision
+                                        </button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="p-3 bg-gray-50 border rounded text-sm whitespace-pre-wrap">
+                                    {note.content}
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Revision History */}
+                        {note.history && note.history.length > 0 && (
+                            <div>
+                                <div className="flex justify-between items-center mb-2">
+                                    <h3 className="font-bold text-sm text-gray-700">Revision History</h3>
+                                    {/* Revert Button for Clinician */}
+                                    {userRole === 'clinician' && note.history.length > 0 && (
+                                        <button
+                                            onClick={() => onRevert(note.id)}
+                                            className="text-xs bg-red-50 text-red-600 border border-red-200 px-2 py-1 rounded hover:bg-red-100 flex items-center"
+                                            title="Revert to previous version"
+                                        >
+                                            <span className="mr-1">↩️</span> Revert
+                                        </button>
+                                    )}
+                                </div>
+
+                                {note.reverted_at && (
+                                    <div className="mb-2 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800">
+                                        <strong>↩️ Reverted</strong> by <span className="capitalize">{note.reverted_by}</span> at {note.reverted_at}
+                                    </div>
+                                )}
+
+                                <div className="space-y-2">
+                                    {note.history.map((ver, idx) => (
+                                        <div key={idx} className="p-2 border rounded text-xs bg-gray-50">
+                                            <div className="flex justify-between mb-1">
+                                                <span className="font-bold">v{ver.version}</span>
+                                                <span className="text-gray-500">{ver.timestamp}</span>
+                                            </div>
+                                            <div className="text-gray-600 whitespace-pre-wrap">{ver.content}</div>
+                                            {ver.reverted_at && (
+                                                <div className="mt-1 text-[10px] text-red-500 italic">
+                                                    (Reverted by {ver.reverted_by} at {ver.reverted_at})
+                                                </div>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Highlights in this note */}
+                        {note.highlights && Array.isArray(note.highlights) && note.highlights.length > 0 && (
+                            <div>
+                                <h3 className="font-bold text-sm text-gray-700 mb-2">Highlights / Key Signals</h3>
+                                <div className="space-y-1">
+                                    {note.highlights.map((h, idx) => (
+                                        <div key={idx} className="text-xs p-2 bg-red-50 border border-red-100 rounded text-red-700">
+                                            <div className="font-bold">{h.text}</div>
+                                            {h.reason && <div className="text-gray-500 mt-1">Reason: {h.reason}</div>}
+                                            <div className="text-gray-400 mt-0.5 text-[10px]">(Offset: {h.start}-{h.end})</div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        const getCaretCoordinates = (element, position) => {
+            const div = document.createElement('div');
+            const style = getComputedStyle(element);
+            const properties = [
+                'boxSizing', 'width', 'height', 'overflowX', 'overflowY',
+                'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth',
+                'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
+                'fontStyle', 'fontVariant', 'fontWeight', 'fontStretch', 'fontSize', 'lineHeight', 'fontFamily', 'textAlign', 'textTransform', 'textIndent', 'textDecoration', 'letterSpacing', 'wordSpacing'
+            ];
+            properties.forEach(prop => div.style[prop] = style[prop]);
+
+            div.style.position = 'fixed';
+            div.style.top = '0px';
+            div.style.left = '0px';
+            div.style.visibility = 'hidden';
+            div.style.whiteSpace = 'pre-wrap';
+            div.style.wordWrap = 'break-word';
+
+            div.textContent = element.value.substring(0, position);
+            const span = document.createElement('span');
+            span.textContent = '|';
+            div.appendChild(span);
+
+            document.body.appendChild(div);
+            const { offsetLeft, offsetTop } = span;
+            const rect = element.getBoundingClientRect();
+            document.body.removeChild(div);
+
+            return {
+                top: rect.top + offsetTop - element.scrollTop + window.scrollY,
+                left: rect.left + offsetLeft - element.scrollLeft + window.scrollX
+            };
+        };
+
+        const detectMention = (e, role, setContent, setMentionMenu) => {
+            const val = e.target.value;
+            setContent(val);
+
+            const cursor = e.target.selectionStart;
+            const charBefore = val.slice(cursor - 1, cursor);
+
+            if (charBefore === '@') {
+                const coords = getCaretCoordinates(e.target, cursor);
+                const options = role === 'clinician' ? ['Staff'] : (role === 'staff' ? ['Clinician'] : []);
+                if (options.length > 0) {
+                    setMentionMenu({
+                        x: coords.left,
+                        y: coords.top + 20,
+                        options,
+                        cursorIndex: cursor,
+                        targetInput: {
+                            element: e.target,
+                            value: val,
+                            setValue: setContent
+                        }
+                    });
+                }
+            } else {
+                setMentionMenu(null);
+            }
+        };
+
+        const App = () => {
+            const [role, setRole] = useState('clinician');
+            const [notes, setNotes] = useState([]);
+            const [glanceData, setGlanceData] = useState(null);
+            const [selectedNote, setSelectedNote] = useState(null);
+            const [inputContent, setInputContent] = useState('');
+            const [isGenerating, setIsGenerating] = useState(false);
+            const [manualActionTypes, setManualActionTypes] = useState([]);
+            const [showActionSelector, setShowActionSelector] = useState(false);
+            const [otherActionText, setOtherActionText] = useState('');
+            const [mentionMenu, setMentionMenu] = useState(null);
+
+            const timelineRef = useRef(null);
+            const actionPopupRef = useRef(null);
+            const actionButtonRef = useRef(null);
+            const [popupPosition, setPopupPosition] = useState({ bottom: 0, right: 0 });
+
+            const actionOptions = role === 'clinician' ?
+                ['Need Lab Orders', 'Need Help from Nurse/Staff'] :
+                (role === 'staff' ? ['Request Clinician Review', 'Follow-up with Patient'] : []);
+
+            const updatePopupPosition = () => {
+                if (actionButtonRef.current) {
+                    const rect = actionButtonRef.current.getBoundingClientRect();
+                    setPopupPosition({
+                        bottom: window.innerHeight - rect.top + 5, // 5px gap
+                        right: window.innerWidth - rect.right
+                    });
+                }
+            };
+
+            const toggleActionType = (type) => {
+                if (manualActionTypes.includes(type)) {
+                    setManualActionTypes(manualActionTypes.filter(t => t !== type));
+                } else {
+                    setManualActionTypes([...manualActionTypes, type]);
+                }
+            };
+
+            useEffect(() => {
+                const handleClickOutside = (event) => {
+                    if (actionPopupRef.current && !actionPopupRef.current.contains(event.target) &&
+                        actionButtonRef.current && !actionButtonRef.current.contains(event.target)) {
+                        setShowActionSelector(false);
+                    }
+                    if (mentionMenu) {
+                        setMentionMenu(null);
+                    }
+                };
+
+                const handleResize = () => {
+                    if (showActionSelector) {
+                        updatePopupPosition();
+                    }
+                };
+
+                if (showActionSelector) {
+                    updatePopupPosition();
+                    document.addEventListener('mousedown', handleClickOutside);
+                    window.addEventListener('resize', handleResize);
+                    window.addEventListener('scroll', handleResize, true); // Capture scroll events
+                }
+                return () => {
+                    document.removeEventListener('mousedown', handleClickOutside);
+                    window.removeEventListener('resize', handleResize);
+                    window.removeEventListener('scroll', handleResize, true);
+                };
+            }, [showActionSelector]);
+
+            const fetchData = async () => {
+                try {
+                    const notesResp = await fetch(`${API_BASE}/timeline?role=${role}`);
+                    const notesData = await notesResp.json();
+                    setNotes(notesData);
+
+                    const glanceResp = await fetch(`${API_BASE}/glance?role=${role}`);
+                    const glanceData = await glanceResp.json();
+                    setGlanceData(glanceData);
+                } catch (err) {
+                    console.error("Error fetching data:", err);
+                }
+            };
+
+            useEffect(() => {
+                // Clear selected note when role changes to prevent leaking data from previous role
+                setSelectedNote(null);
+                // Reset action selector state
+                setShowActionSelector(false);
+                setManualActionTypes([]);
+                setOtherActionText('');
+                setMentionMenu(null);
+                fetchData();
+            }, [role]);
+
+            const handleResolveAction = async (actionId, type, comment, newActionTitle) => {
+                try {
+                    const resp = await fetch(`${API_BASE}/actions/${actionId}/resolve`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            role: role,
+                            resolution_type: type, // 'resolve' or 'forward'
+                            comment: comment,
+                            new_action_title: newActionTitle
+                        })
+                    });
+
+                    if (resp.ok) {
+                        fetchData();
+                        // Update selected note to reflect changes
+                        if (selectedNote) {
+                            const updatedNotes = await (await fetch(`${API_BASE}/timeline?role=${role}`)).json();
+                            const updatedNote = updatedNotes.find(n => n.id === selectedNote.id);
+                            if (updatedNote) setSelectedNote(updatedNote);
+                        }
+                    } else {
+                        const err = await resp.json();
+                        alert("Error resolving action: " + err.error);
+                    }
+                } catch (err) {
+                    console.error("Error resolving action:", err);
+                }
+            };
+
+            const handleCreateAction = async () => {
+                const title = prompt("Enter action title:");
+                if (!title) return;
+
+                // For this prototype, we'll attach manual actions to the "system" or create a system note
+                // But to make it cleaner, let's create a "Staff Action Note"
+                try {
+                    await fetch(`${API_BASE}/notes`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            content: `Action Created: ${title}`,
+                            author_role: role,
+                            type: 'staff_note',
+                            simulate_ai: true // To trigger action generation logic if keywords exist, or we can manually add? 
+                            // Actually backend logic generates actions based on content keywords currently.
+                            // Let's rely on that for "dynamic" actions as requested, or update backend to accept manual actions.
+                        })
+                    });
+                    // Wait, requirement says "Action created by user". 
+                    // Let's just post a note that *contains* the action text, and our backend "AI" will pick it up if it matches keywords.
+                    // Or better, let's update backend to accept explicit actions? 
+                    // For now, let's stick to the "Note -> Action" flow which is provenance-based.
+                    // If the user wants to create an assignment, they write a note "Please schedule follow-up".
+                    fetchData();
+                } catch (err) {
+                    console.error(err);
+                }
+            };
+            const handleSignalClick = (signal) => {
+                // Find note
+                const note = notes.find(n => n.id === signal.source_note_id);
+                if (note) {
+                    setSelectedNote(note);
+                    // Scroll to note
+                    const el = document.getElementById(`note-${note.id}`);
+                    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+            };
+
+            const handleActionClick = (action) => {
+                const note = notes.find(n => n.id === action.provenance_note_id);
+                if (note) {
+                    setSelectedNote(note);
+                    const el = document.getElementById(`note-${note.id}`);
+                    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                } else {
+                    // Handle case where source note is not visible (e.g. Clinician note with action assigned to Staff)
+                    const stubNote = {
+                        id: action.provenance_note_id || 'unknown',
+                        content: "🔒 The source note for this action is restricted and cannot be viewed.\n\nYou can still resolve the action below.",
+                        author_role: "system",
+                        type: "restricted_note",
+                        timestamp: action.created_at || new Date().toISOString(),
+                        actions: [action],
+                        isStub: true,
+                        visibility_scope: "restricted"
+                    };
+                    setSelectedNote(stubNote);
+                }
+            };
+
+            const handleConfirmedClick = (item) => {
+                const note = notes.find(n => n.id === item.source_note_id);
+                if (note) {
+                    setSelectedNote(note);
+                    const el = document.getElementById(`note-${note.id}`);
+                    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+            };
+
+            const handleAiNoteClick = (item) => {
+                const note = notes.find(n => n.id === item.id);
+                if (note) {
+                    setSelectedNote(note);
+                    const el = document.getElementById(`note-${note.id}`);
+                    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+            };
+
+            const handleInputChange = (e) => {
+                detectMention(e, role, setInputContent, setMentionMenu);
+            };
+
+            const handleMentionSelect = (option) => {
+                if (!mentionMenu) return;
+                const { targetInput, cursorIndex } = mentionMenu;
+                const { value, setValue } = targetInput;
+
+                const before = value.slice(0, cursorIndex);
+                const after = value.slice(cursorIndex);
+                const newValue = before + option + ' ' + after;
+
+                setValue(newValue);
+                setMentionMenu(null);
+            };
+
+            const handleKeyDown = (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    if (mentionMenu) {
+                        e.preventDefault();
+                        handleMentionSelect(mentionMenu.options[0]);
+                        return;
+                    }
+                    // Only submit if it's the main input
+                    // We need to check if e.target is the main textarea
+                    // Or we can rely on context. 
+                    // But handleKeyDown is attached to the main textarea in the original code.
+                    // We should keep it that way for the main input.
+                    // For SidePanel, we will have separate handlers.
+                    if (e.target.closest('form')) {
+                        e.preventDefault();
+                        handleSubmitNote(e);
+                    }
+                }
+            };
+
+            const handleSubmitNote = async (e) => {
+                if (e) e.preventDefault();
+                if (!inputContent.trim()) return;
+
+                const type = role === 'patient' ? 'patient_input' :
+                    role === 'staff' ? 'staff_note' : 'clinician_note';
+
+                let finalActions = [...manualActionTypes];
+                if (finalActions.includes('Others')) {
+                    finalActions = finalActions.filter(t => t !== 'Others');
+                    if (otherActionText.trim()) {
+                        finalActions.push(otherActionText.trim());
+                    }
+                }
+
+                try {
+                    await fetch(`${API_BASE}/notes`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            content: inputContent,
+                            author_role: role,
+                            type: type,
+                            simulate_ai: true, // Trigger auto-tagging
+                            manual_actions: finalActions
+                        })
+                    });
+                    setInputContent('');
+                    setManualActionTypes([]);
+                    setOtherActionText('');
+                    setShowActionSelector(false);
+                    fetchData();
+                } catch (err) {
+                    console.error("Error submitting note:", err);
+                }
+            };
+
+            const handleEndConsult = async () => {
+                if (!confirm("Are you sure you want to end the consult/session? This will generate a summary.")) return;
+
+                setIsGenerating(true);
+                try {
+                    // For provenance, we could pass the last note ID, but backend can infer from history.
+                    // We'll pass the ID of the last note in the list as a reference point if available.
+                    const lastNoteId = notes.length > 0 ? notes[0].id : null;
+
+                    await fetch(`${API_BASE}/consult/end`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            role: role,
+                            source_note_id: lastNoteId
+                        })
+                    });
+                    fetchData();
+                } catch (err) {
+                    console.error("Error ending consult:", err);
+                } finally {
+                    setIsGenerating(false);
+                }
+            };
+
+            const handleGenerateAI = async () => {
+                // Modified: No prompt input. Auto-generate simulation.
+                setIsGenerating(true);
+                try {
+                    await fetch(`${API_BASE}/notes`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            content: "", // Empty content triggers backend auto-generation logic
+                            author_role: 'ai',
+                            type: 'ai_consult_summary',
+                            simulate_ai: true
+                        })
+                    });
+                    fetchData();
+                } catch (err) {
+                    console.error("Error generating AI note:", err);
+                } finally {
+                    setIsGenerating(false);
+                }
+            };
+
+            const handleSaveEdit = async (noteId, content) => {
+                try {
+                    await fetch(`${API_BASE}/notes/${noteId}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            content: content,
+                            role: role
+                        })
+                    });
+                    fetchData();
+                    // Update selected note reference
+                    const updatedNotes = await (await fetch(`${API_BASE}/timeline?role=${role}`)).json();
+                    const updatedNote = updatedNotes.find(n => n.id === noteId);
+                    if (updatedNote) setSelectedNote(updatedNote);
+                } catch (err) {
+                    alert("Error updating note: " + err); // Simple error handling
+                }
+            };
+
+            const handleRevert = async (noteId) => {
+                if (!confirm("Are you sure you want to revert this note to its previous version?")) return;
+                try {
+                    const resp = await fetch(`${API_BASE}/notes/${noteId}/revert`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ role: role })
+                    });
+
+                    if (resp.ok) {
+                        const updatedNote = await resp.json();
+                        fetchData();
+                        setSelectedNote(updatedNote);
+                    } else {
+                        const err = await resp.json();
+                        alert("Error reverting note: " + err.error);
+                    }
+                } catch (err) {
+                    console.error("Error reverting note:", err);
+                }
+            };
+
+            const handleReset = async () => {
+                await fetch(`${API_BASE}/reset`, { method: 'POST' });
+                fetchData();
+                setSelectedNote(null);
+            };
+
+            // Manual Highlight Context Menu
+            const [contextMenu, setContextMenu] = useState(null);
+
+            const handleContextMenu = (e) => {
+                // Check if we clicked on an existing highlight
+                let target = e.target;
+                let existingHighlightId = null;
+
+                if (target.hasAttribute('data-highlight-id')) {
+                    existingHighlightId = target.getAttribute('data-highlight-id');
+                }
+
+                // Find if we are inside a note
+                let node = target;
+                let noteId = null;
+                while (node && node !== document.body) {
+                    if (node.nodeType === 1 && typeof node.id === 'string' && node.id.startsWith('note-')) {
+                        noteId = node.id.replace('note-', '');
+                        break;
+                    }
+                    node = node.parentNode;
+                }
+
+                if (!noteId) return;
+
+                if (existingHighlightId) {
+                    e.preventDefault();
+                    setContextMenu({
+                        x: e.clientX,
+                        y: e.clientY,
+                        type: 'remove',
+                        highlightId: existingHighlightId,
+                        noteId: noteId
+                    });
+                    return;
+                }
+
+                const selection = window.getSelection();
+                if (!selection.rangeCount || selection.isCollapsed) return;
+
+                // For selection, we already found noteId based on click target, 
+                // but technically selection could be across notes. 
+                // For prototype, assuming selection matches click target context is fine.
+
+                e.preventDefault();
+                setContextMenu({
+                    x: e.clientX,
+                    y: e.clientY,
+                    type: 'add',
+                    text: selection.toString(),
+                    noteId: noteId
+                });
+            };
+
+            const handleHighlight = async () => {
+                if (!contextMenu) return;
+                const { noteId, text } = contextMenu;
+                setContextMenu(null);
+
+                const note = notes.find(n => n.id === noteId);
+                if (!note) return;
+
+                // Find text position
+                // Note: simple indexOf finds first occurrence. 
+                const start = note.content.indexOf(text);
+                if (start === -1) {
+                    alert("Selection parsing error: text not found in source.");
+                    return;
+                }
+
+                try {
+                    await fetch(`${API_BASE}/notes/${noteId}/highlight`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            text: text,
+                            start: start,
+                            end: start + text.length
+                        })
+                    });
+                    fetchData();
+                } catch (err) {
+                    console.error("Error saving highlight:", err);
+                }
+            };
+
+            const handleRemoveHighlight = async () => {
+                if (!contextMenu || contextMenu.type !== 'remove') return;
+                const { noteId, highlightId } = contextMenu;
+                setContextMenu(null);
+
+                try {
+                    await fetch(`${API_BASE}/notes/${noteId}/highlight/${highlightId}`, {
+                        method: 'DELETE'
+                    });
+                    fetchData();
+                } catch (err) {
+                    console.error("Error removing highlight:", err);
+                }
+            };
+
+            useEffect(() => {
+                const closeMenu = () => setContextMenu(null);
+                document.addEventListener('click', closeMenu);
+                return () => document.removeEventListener('click', closeMenu);
+            }, []);
+
+            return (
+                <div className="flex flex-col h-full font-sans text-gray-900" onContextMenu={handleContextMenu}>
+                    {/* Header */}
+                    <header className="h-14 bg-white border-b px-4 flex items-center justify-between shrink-0">
+                        <div className="flex items-center space-x-4">
+                            <h1 className="text-xl font-bold text-blue-700">Nightingale <span className="font-light text-gray-500">Clinic</span></h1>
+                            <div className="text-xs bg-gray-100 px-2 py-1 rounded">Prototype Environment</div>
+                        </div>
+                        <div className="flex items-center space-x-4">
+                            <button onClick={handleReset} className="text-xs text-red-500 hover:underline">Reset Data</button>
+                            <RoleSwitcher currentRole={role} onChange={setRole} />
+                        </div>
+                    </header>
+
+                    {/* Glance View */}
+                    <GlanceView
+                        data={glanceData}
+                        onSignalClick={handleSignalClick}
+                        onActionClick={handleActionClick}
+                        onConfirmedClick={handleConfirmedClick}
+                        onAiNoteClick={handleAiNoteClick}
+                        handleCreateAction={handleCreateAction}
+                        role={role}
+                    />
+
+                    {/* Main Content Area */}
+                    <div className="flex-1 flex overflow-hidden">
+                        {/* Timeline */}
+                        <div className="flex-1 flex flex-col bg-white min-w-0">
+                            {/* Timeline List */}
+                            <div className="flex-1 overflow-y-auto p-4 relative" ref={timelineRef}>
+                                <div className="timeline-line"></div>
+                                <div className="space-y-6">
+                                    {notes.length === 0 ? (
+                                        <div className="pl-8 text-gray-400 italic text-sm">No entries yet. Start typing or simulate AI.</div>
+                                    ) : (
+                                        notes.map(note => (
+                                            <TimelineEntry
+                                                key={note.id}
+                                                note={note}
+                                                isSelected={selectedNote && selectedNote.id === note.id}
+                                                onClick={setSelectedNote}
+                                                userRole={role}
+                                            />
+                                        ))
+                                    )}
+                                </div>
+                            </div>
+                            {/* Input Area */}
+                            <div className="p-4 border-t bg-gray-50">
+                                <form onSubmit={handleSubmitNote} className="relative">
+                                    <textarea
+                                        value={inputContent}
+                                        onChange={handleInputChange}
+                                        onKeyDown={handleKeyDown}
+                                        placeholder={`Type a note as ${role}... (AI will analyze content dynamically)`}
+                                        className="w-full p-3 border rounded-lg shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none h-24 text-sm pb-10"
+                                    />
+
+                                    {/* Mention Popup */}
+                                    {mentionMenu && ReactDOM.createPortal(
+                                        <div
+                                            style={{
+                                                position: 'absolute',
+                                                top: `${mentionMenu.y}px`,
+                                                left: `${mentionMenu.x}px`,
+                                                zIndex: 10001
+                                            }}
+                                            className="bg-white border shadow-lg rounded p-1 min-w-[120px]"
+                                        >
+                                            {mentionMenu.options.map(opt => (
+                                                <div
+                                                    key={opt}
+                                                    onClick={() => handleMentionSelect(opt)}
+                                                    className="px-3 py-1 text-sm hover:bg-blue-50 cursor-pointer text-gray-700 font-medium"
+                                                >
+                                                    {opt}
+                                                </div>
+                                            ))}
+                                        </div>,
+                                        document.body
+                                    )}
+
+                                    {/* Action Selector Popup */}
+                                    {showActionSelector && ReactDOM.createPortal(
+                                        <div
+                                            ref={actionPopupRef}
+                                            style={{
+                                                position: 'fixed',
+                                                bottom: `${popupPosition.bottom}px`,
+                                                right: `${popupPosition.right}px`,
+                                                zIndex: 9999
+                                            }}
+                                            className="bg-white border shadow-lg rounded p-3 w-64 animate-fade-in flex flex-col max-h-[300px]"
+                                        >
+                                            <div className="flex justify-between items-center mb-2 shrink-0">
+                                                <h4 className="text-xs font-bold text-gray-500">Attach Actions (Assign to {role === 'clinician' ? 'Staff' : 'Clinician'})</h4>
+                                                <div className="flex space-x-2">
+                                                    <button
+                                                        type="button"
+                                                        onMouseDown={(e) => {
+                                                            e.preventDefault();
+                                                            e.stopPropagation();
+                                                            setShowActionSelector(false);
+                                                        }}
+                                                        className="text-xs bg-blue-600 text-white px-2 py-1 rounded hover:bg-blue-700 font-medium"
+                                                    >
+                                                        Done
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            <div className="space-y-1 overflow-y-auto">
+                                                {actionOptions.map(action => (
+                                                    <div key={action}>
+                                                        <label className="flex items-center space-x-2 text-sm cursor-pointer hover:bg-gray-50 p-1 rounded">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={manualActionTypes.includes(action)}
+                                                                onChange={() => toggleActionType(action)}
+                                                                className="rounded text-blue-600 focus:ring-blue-500"
+                                                            />
+                                                            <span>{action}</span>
+                                                        </label>
+                                                    </div>
+                                                ))}
+                                                {actionOptions.length === 0 && <div className="text-xs text-gray-400 italic p-1">No actions available for this role.</div>}
+                                            </div>
+                                        </div>,
+                                        document.body
+                                    )}
+
+                                    <div className="absolute bottom-2 right-2 flex space-x-2 items-center">
+                                        {/* Toggle Button for Action Selector (Only for Staff/Clinician) */}
+                                        {['staff', 'clinician'].includes(role) && (
+                                            <button
+                                                ref={actionButtonRef}
+                                                type="button"
+                                                onClick={(e) => {
+                                                    e.stopPropagation(); // Prevent document click handler from immediately closing it
+                                                    if (!showActionSelector) {
+                                                        // Update position before showing
+                                                        // Actually useEffect will do it, but to avoid flash we can do it here too if we want.
+                                                        // But let's rely on useEffect and state flow.
+                                                        setShowActionSelector(true);
+                                                    } else {
+                                                        setShowActionSelector(false);
+                                                    }
+                                                }}
+                                                className={`px-3 py-1 text-xs border rounded-full flex items-center transition-colors ${manualActionTypes.length > 0 ? 'bg-yellow-100 text-yellow-800 border-yellow-300 font-bold' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+                                                title="Add actionable tasks"
+                                            >
+                                                {manualActionTypes.length > 0 ? `⚡ ${manualActionTypes.length} Actions` : '+ Add Action'}
+                                            </button>
+                                        )}
+
+                                        {['clinician', 'staff', 'patient'].includes(role) && (
+                                            <button
+                                                type="button"
+                                                onClick={handleEndConsult}
+                                                disabled={isGenerating}
+                                                className="px-3 py-1 text-xs bg-green-100 text-green-700 rounded hover:bg-green-200 flex items-center"
+                                            >
+                                                {isGenerating ? 'Generating...' : (role === 'patient' ? '🏁 End Session' : '🏁 End Consult')}
+                                            </button>
+                                        )}
+
+                                        {['clinician', 'staff', 'admin'].includes(role) && (
+                                            <button
+                                                type="button"
+                                                onClick={handleGenerateAI}
+                                                disabled={isGenerating}
+                                                className="px-3 py-1 text-xs bg-purple-100 text-purple-700 rounded hover:bg-purple-200 flex items-center"
+                                            >
+                                                {isGenerating ? 'Generating...' : '✨ Simulate AI Scribe'}
+                                            </button>
+                                        )}
+                                        <button
+                                            type="submit"
+                                            className="px-4 py-1 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 shadow-sm"
+                                        >
+                                            Post
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+
+                        </div>
+
+                        {/* Side Panel */}
+                        <div className="w-[400px] shrink-0 border-l bg-white overflow-hidden">
+                            <SidePanel
+                                note={selectedNote}
+                                userRole={role}
+                                onSaveEdit={handleSaveEdit}
+                                onResolveAction={handleResolveAction}
+                                setMentionMenu={setMentionMenu}
+                                onRevert={handleRevert}
+                            />
+                        </div>
+                    </div>
+                    {/* Context Menu */}
+                    {contextMenu && ReactDOM.createPortal(
+                        <div
+                            style={{
+                                position: 'fixed',
+                                top: `${contextMenu.y}px`,
+                                left: `${contextMenu.x}px`,
+                                zIndex: 10000
+                            }}
+                            className="bg-white border shadow-md rounded py-1 min-w-[120px]"
+                        >
+                            {contextMenu.type === 'remove' ? (
+                                <button
+                                    onClick={handleRemoveHighlight}
+                                    className="w-full text-left px-4 py-2 text-sm hover:bg-red-50 text-gray-700 hover:text-red-700 flex items-center"
+                                >
+                                    <span className="mr-2">❌</span> Remove Highlight
+                                </button>
+                            ) : (
+                                <button
+                                    onClick={handleHighlight}
+                                    className="w-full text-left px-4 py-2 text-sm hover:bg-blue-50 text-gray-700 hover:text-blue-700 flex items-center"
+                                >
+                                    <span className="mr-2">🖍️</span> Highlight
+                                </button>
+                            )}
+                        </div>,
+                        document.body
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+
+</html>

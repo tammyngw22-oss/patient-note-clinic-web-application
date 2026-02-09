@@ -1,0 +1,38 @@
+# Third-Party Libraries, Models, and Licenses
+
+This project utilizes the following open-source libraries, frameworks, and external services.
+
+## Backend Dependencies (Python)
+
+| Library | Version (approx) | License | Purpose |
+| :--- | :--- | :--- | :--- |
+| **Flask** | 3.x | BSD-3-Clause | Web framework for the backend API |
+| **Flask-CORS** | 5.x | MIT | Handling Cross-Origin Resource Sharing (CORS) |
+| **google-generativeai** | 0.x | Apache 2.0 | SDK for accessing Google Gemini API |
+| **pytest** | 8.x | MIT | Testing framework |
+| **cryptography** | 42.x | Apache 2.0 / BSD | Encryption for sensitive data (Fernet) |
+
+## Frontend Dependencies (CDN / Browser-based)
+
+| Library | Source/CDN | License | Purpose |
+| :--- | :--- | :--- | :--- |
+| **React** | unpkg.com (v18) | MIT | UI Library for building the Single Page Application |
+| **React DOM** | unpkg.com (v18) | MIT | React rendering for the DOM |
+| **Babel Standalone** | unpkg.com | MIT | In-browser JSX compilation (for prototyping without build steps) |
+| **Tailwind CSS** | cdn.tailwindcss.com | MIT | Utility-first CSS framework for styling |
+
+## AI Models & Services
+
+| Model Name | Provider | Terms of Service | Usage in Project |
+| :--- | :--- | :--- | :--- |
+| **Gemini Pro** | Google | [Google Generative AI Terms](https://ai.google.dev/terms) | Used for generating clinical summaries, extracting highlights, and suggesting actions. |
+
+## Fonts & Assets
+
+| Asset | License | Source |
+| :--- | :--- | :--- |
+| **System Fonts** | N/A | Uses default system sans-serif fonts (via Tailwind's `font-sans`) |
+
+---
+
+*Note: This attribution list is provided for informational purposes. Please verify specific version licenses in their respective repositories.*
